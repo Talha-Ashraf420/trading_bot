@@ -11,8 +11,8 @@ TEST_MODE = True
 # config.py
 EXCHANGE_CONFIG = {
     'id': 'binance',  # Exchange ID from CCXT, e.g., 'binance', 'kraken', 'coinbasepro'
-    'apiKey': 'Lw67110MBMRcSQ05ip05JkIdgZd0FEv7NxrvA1HSApLrUiXVFBKhQbTVoTsVgbkP',
-    'secret': '5vY3D1wb94O9yOFMqdWHssZOtrXrcbtykIvYhZuvI5mjqVAcR3hHHtwL9XDT0zty',
+    'apiKey': '1yJ1n8NkCzmrMoLN6tHakZsS5kavgK2qI1KdRGAP56lLSAqDmF1qQExvYXt0q9Xp',
+    'secret': 'a8hlIP0YhRc9yGijnwuQMHinXNTuyFmOuXbzaKnv1BMuOtnlZWyq5ZdBomsSMuMj',
     # For sandbox/testnet trading, uncomment the following lines
     'options': {
         'defaultType': 'spot', # or 'spot'
@@ -26,6 +26,7 @@ TRADING_CONFIG = {
     'timeframe': '5m',         # Timeframe for candles (e.g., '1m', '5m', '1h', '1d')
     'capital_allocation': 0.1, # Percentage of total capital to use per trade (e.g., 0.1 for 10%)
     'risk_per_trade': 0.01,    # Percentage of capital to risk per trade (e.g., 0.01 for 1%)
+    'buy_only_mode': True,     # Only execute BUY orders (good for beginners with USDT balance)
 }
 
 STRATEGY_CONFIG = {

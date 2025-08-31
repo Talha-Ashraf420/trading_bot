@@ -82,9 +82,6 @@ class AdvancedTradingBot:
             except Exception as e:
                 if show_detailed_logs:
                     print(f"❌ Error analyzing {pair}: {e}")
-                else:
-                    # Silent error handling for quick scans
-                    pass
         
         # Show strategy performance (only in detailed logs)
         if show_detailed_logs:
@@ -132,11 +129,7 @@ class AdvancedTradingBot:
             print(f"   💪 Signal Strength: {best_strength}/10")
         else:
             # Quick summary for non-detailed logs
-            signal_display = best_signal
-            if TRADING_CONFIG.get('buy_only_mode', False) and best_signal == 'SELL':
-                signal_display = 'HOLD (SELL→BUY_ONLY)'
-            
-            print(f"📊 {symbol}: ${latest['close']:.4f} ({price_change_str}) | Best: {signal_display if signal_display != 'HOLD' else 'HOLD'} ({best_strength}/10)")
+            print(f"📊 {symbol}: ${latest['close']:.4f} ({price_change_str}) | Best: {best_signal if best_signal != 'HOLD' else 'HOLD'} ({best_strength}/10)")
             
             if best_signal == 'HOLD' or best_strategy == 'none':
                 return
@@ -152,46 +145,11 @@ class AdvancedTradingBot:
         balance = self.db.get_current_balance(self.user_id)
         latest = df.iloc[-1]
         entry_price = latest['close']
+        atr_value = latest['ATR']
         
-        # Check if we can execute this trade based on available balance
-        side = 'buy' if signal == 'BUY' else 'sell'
-        
-        # Check BUY_ONLY mode
-        if TRADING_CONFIG.get('buy_only_mode', False) and side == 'sell':
-            if show_detailed_logs:
-                print(f"   ⚠️  SELL signal ignored: BUY_ONLY mode enabled")
-                print(f"   🔍 Result: HOLD - Bot configured for BUY orders only")
-            return
-        
-        if side == 'sell':
-            # For SELL orders, we need to own the base asset (e.g., ETH in ETH/USDT)
-            base_asset = symbol.split('/')[0]  # ETH from ETH/USDT
-            asset_balance = self.db.get_current_balance(self.user_id, base_asset)
-            
-            if asset_balance <= 0:
-                if show_detailed_logs:
-                    print(f"   ⚠️  Cannot SELL {symbol}: No {base_asset} balance")
-                    print(f"   🔍 Result: HOLD - Need to own {base_asset} to sell")
-                return
-        
-        elif side == 'buy':
-            # For BUY orders, we need USDT balance
-            if balance <= 50:  # Minimum $50 to place a trade
-                if show_detailed_logs:
-                    print(f"   ⚠️  Cannot BUY {symbol}: Insufficient USDT balance (${balance:.2f})")
-                    print(f"   🔍 Result: HOLD - Need at least $50 USDT to trade")
-                return
-        
-        # Calculate indicators first to get ATR
+        # Calculate stop loss using the selected strategy
         strategy = self.strategy_manager.strategies[strategy_name]
         df_with_indicators = strategy.calculate_indicators(df)
-        
-        # Get ATR from the indicators dataframe
-        if 'ATR' in df_with_indicators.columns:
-            atr_value = df_with_indicators['ATR'].iloc[-1]
-        else:
-            # Fallback: calculate a simple ATR-like value
-            atr_value = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
         
         side = 'buy' if signal == 'BUY' else 'sell'
         stop_loss_price = self.risk_manager.determine_stop_loss(
@@ -204,20 +162,9 @@ class AdvancedTradingBot:
             return
         
         # Calculate position size using strategy allocation
-        # Use appropriate balance based on trade side
-        if side == 'sell':
-            base_asset = symbol.split('/')[0]
-            available_balance = self.db.get_current_balance(self.user_id, base_asset)
-            # For sell orders, position size is limited by available asset balance
-            max_position_size = available_balance * 0.95  # Leave 5% buffer
-            calculated_position_size = self.strategy_manager.calculate_position_size(
-                strategy_name, balance, entry_price, stop_loss_price
-            )
-            position_size = min(calculated_position_size, max_position_size)
-        else:
-            position_size = self.strategy_manager.calculate_position_size(
-                strategy_name, balance, entry_price, stop_loss_price
-            )
+        position_size = self.strategy_manager.calculate_position_size(
+            strategy_name, balance, entry_price, stop_loss_price
+        )
         
         if position_size <= 0:
             if show_detailed_logs:
@@ -434,13 +381,6 @@ def main():
         print("⚠️  Running in TEST MODE - No real money at risk")
         print(f"📊 Monitoring {len(selected_pairs)} pairs with multiple strategies")
         print("📝 Detailed logs every 30 seconds, quick updates every 10 seconds")
-        
-        # Show trading mode
-        if TRADING_CONFIG.get('buy_only_mode', False):
-            print("🔒 BUY_ONLY MODE: Will only execute BUY orders (SELL signals ignored)")
-        else:
-            print("🔄 FULL TRADING MODE: Will execute both BUY and SELL orders")
-            
         print("🛑 Press Ctrl+C to stop")
         print("="*50)
         
