@@ -1,24 +1,17 @@
 # config.py
 
-# Replace with your actual Binance API key and secret
-API_KEY="Lw67110MBMRcSQ05ip05JkIdgZd0FEv7NxrvA1HSApLrUiXVFBKhQbTVoTsVgbkP"
-API_SECRET="5vY3D1wb94O9yOFMqdWHssZOtrXrcbtykIvYhZuvI5mjqVAcR3hHHtwL9XDT0zty"
+# Binance API Configuration - RESET FOR FRESH START
+API_KEY = "Pr4oufbwYVOO8SIhS8e096Am9iZ2GOWwortfyNWq9KgSpnZ6wGUA6QvfvA3HiF83"
+API_SECRET = "RuhmvsuTJIQLxySoMJCADsIO4IQLkrTAk1ioWgTJWiBK7ozzYiexnCpBAN9GtlPH"
 
-# Set to False when you are ready for live trading
+# Set to True for paper trading (recommended for learning)
 TEST_MODE = True
 
-
-# config.py
-EXCHANGE_CONFIG = {
-    'id': 'binance',  # Exchange ID from CCXT, e.g., 'binance', 'kraken', 'coinbasepro'
-    'apiKey': '1yJ1n8NkCzmrMoLN6tHakZsS5kavgK2qI1KdRGAP56lLSAqDmF1qQExvYXt0q9Xp',
-    'secret': 'a8hlIP0YhRc9yGijnwuQMHinXNTuyFmOuXbzaKnv1BMuOtnlZWyq5ZdBomsSMuMj',
-    # For sandbox/testnet trading, uncomment the following lines
-    'options': {
-        'defaultType': 'spot', # or 'spot'
-        'adjustForTimeDifference': True,
-        'test': True, # Use the testnet
-    },
+# Database Configuration
+DATABASE_CONFIG = {
+    'host': 'cluster0.7fyyw6x.mongodb.net',
+    'database': 'trading_bot',
+    'connection_string': 'mongodb+srv://talha_db_user:52cOcZZwz8AxmQlu@cluster0.7fyyw6x.mongodb.net/'
 }
 
 TRADING_CONFIG = {

@@ -1,476 +1,527 @@
-# main.py
+#!/usr/bin/env python3
 """
-Advanced Multi-Strategy Trading Bot
-
-Features:
-- Multiple trading strategies with portfolio allocation
-- MongoDB Atlas integration for order and user tracking
-- Trading pair selection with risk management
-- User account management with comprehensive logging
-- Real-time updates every 30 seconds
+Advanced Crypto Trading Bot - Single Entry Point
+Complete trading system with 10+ strategies and 30-second analysis
 """
 
+import asyncio
 import time
+import sys
+import os
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
+import pandas as pd
 import schedule
-from datetime import datetime
-from typing import Dict, List
-from exchange_handler import ExchangeHandler
-from strategy_manager import StrategyManager
-from risk_manager import AdvancedRiskManager
-from database import initialize_database, get_database
-from config import TRADING_CONFIG
+from concurrent.futures import ThreadPoolExecutor
+import signal
+
+# Add src directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+# Import organized modules
+from core.database_schema import TradingDatabase
+from indicators.technical_indicators_simple import TechnicalIndicators
+from strategies.strategy_engine import (
+    StrategyEngine, MultiIndicatorStrategy, MeanReversionStrategy,
+    TrendFollowingStrategy, BreakoutStrategy
+)
+from strategies.advanced_strategies import (
+    BbandRsiStrategy, EmaRsiStrategy, MacdRsiStrategy,
+    AdxMomentumStrategy, VolatilityBreakoutStrategy, ScalpingStrategy,
+    AdvancedStrategyFactory
+)
+from core.risk_management import RiskManager
+from utils.logger import TradingLogger
+from utils.enhanced_logger import EnhancedMarketLogger
+from core.binance_client import BinanceClient
+from utils.backtesting_engine import AdvancedBacktester
+import config
 
 class AdvancedTradingBot:
-    """Enhanced trading bot with multiple strategies and database integration"""
+    """
+    Complete cryptocurrency trading bot with advanced features:
+    - 10+ sophisticated trading strategies
+    - Real-time 30-second market analysis
+    - Advanced risk management
+    - MongoDB data persistence
+    - Live Binance integration
+    - Comprehensive backtesting
+    """
     
-    def __init__(self, user_id: str, selected_pairs: List[str]):
-        self.user_id = user_id
-        self.selected_pairs = selected_pairs
-        self.db = get_database()
+    def __init__(self):
+        print("🚀 ADVANCED CRYPTO TRADING BOT")
+        print("🔥 10+ Strategies | 30s Analysis | Full Risk Management")
+        print("=" * 70)
         
-        # Initialize components
-        self.exchange = ExchangeHandler()
-        self.strategy_manager = StrategyManager(user_id)
-        self.risk_manager = AdvancedRiskManager()
+        # Initialize core components
+        print("🔧 Initializing components...")
         
-        # Track positions per pair
-        self.pair_positions = {pair: False for pair in selected_pairs}
+        self.database = TradingDatabase()
+        print("   ✅ Database connected")
         
-        print(f"🚀 Advanced Trading Bot initialized for user: {user_id}")
-        print(f"📊 Monitoring pairs: {', '.join(selected_pairs)}")
-        
-        # Add logging for 30-second updates
-        self.last_log_time = time.time()
-        self.log_interval = 30  # 30 seconds
-
-    def run_trading_cycle(self):
-        """Run trading cycle for all selected pairs"""
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        current_timestamp = time.time()
-        
-        # Check if we should show detailed logs (every 30 seconds)
-        show_detailed_logs = (current_timestamp - self.last_log_time) >= self.log_interval
-        
-        if show_detailed_logs:
-            print("\n" + "="*80)
-            print(f"🔄 Advanced Trading Cycle - {current_time}")
-            print("="*80)
-            self.last_log_time = current_timestamp
+        self.exchange = BinanceClient()
+        if not self.exchange.client:
+            print("   ⚠️ Exchange connection failed - check API keys")
         else:
-            print(f"⏱️  {current_time} - Quick market scan...")
+            print("   ✅ Exchange connected")
         
-        # Get portfolio status
-        portfolio_status = self.strategy_manager.get_portfolio_status()
+        self.strategy_engine = StrategyEngine(self.database)
+        self.risk_manager = RiskManager(self.database, config.STRATEGY_CONFIG)
+        self.indicators = TechnicalIndicators()
         
-        if show_detailed_logs:
-            print(f"\n💼 PORTFOLIO STATUS:")
-            print(f"   Balance: ${portfolio_status['current_balance']:.2f}")
-            print(f"   Exposure: ${portfolio_status['total_exposure']:.2f} ({portfolio_status['exposure_ratio']:.1%})")
-            print(f"   Positions: {portfolio_status['total_positions']}/{portfolio_status['max_positions']}")
-        else:
-            print(f"💼 Balance: ${portfolio_status['current_balance']:.2f} | Positions: {portfolio_status['total_positions']}/{portfolio_status['max_positions']}")
+        self.logger = TradingLogger(self.database, {
+            'log_level': 'INFO',
+            'console_log_level': 'INFO',
+            'log_file': 'trading_bot.log'
+        })
         
-        if not portfolio_status['can_open_new']:
-            if show_detailed_logs:
-                print("⚠️  Maximum positions reached. Monitoring existing positions...")
-            return
-        
-        # Analyze each trading pair
-        for pair in self.selected_pairs:
-            try:
-                self._analyze_pair(pair, show_detailed_logs)
-            except Exception as e:
-                if show_detailed_logs:
-                    print(f"❌ Error analyzing {pair}: {e}")
-                else:
-                    # Silent error handling for quick scans
-                    pass
-        
-        # Show strategy performance (only in detailed logs)
-        if show_detailed_logs:
-            self._show_strategy_performance()
-
-    def _analyze_pair(self, symbol: str, show_detailed_logs: bool = True):
-        """Analyze a specific trading pair"""
-        if show_detailed_logs:
-            print(f"\n📊 ANALYZING {symbol}")
-            print("-" * 40)
-        
-        # Fetch market data
-        df = self.exchange.fetch_ohlcv(symbol, TRADING_CONFIG['timeframe'])
-        if df.empty:
-            if show_detailed_logs:
-                print(f"❌ Could not fetch data for {symbol}")
-            return
-        
-        # Get current price info
-        latest = df.iloc[-1]
-        prev = df.iloc[-2] if len(df) > 1 else latest
-        price_change = ((latest['close'] - prev['close']) / prev['close']) * 100
-        price_change_str = f"+{price_change:.2f}%" if price_change > 0 else f"{price_change:.2f}%"
-        
-        # Analyze all strategies
-        strategy_results = self.strategy_manager.analyze_all_strategies(df, symbol)
-        
-        # Get best signal
-        best_strategy, best_signal, best_strength, allocation = self.strategy_manager.get_best_signal(df, symbol)
-        
-        if show_detailed_logs:
-            print(f"   Price: ${latest['close']:.4f} ({price_change_str})")
-            print(f"   Volume: {latest['volume']:,.0f}")
-            
-            print(f"   Strategy Analysis:")
-            for strategy_name, result in strategy_results.items():
-                status = "✅" if result['can_trade'] else "⏸️"
-                print(f"     {status} {strategy_name.title()}: {result['signal']} (Strength: {result['strength']}/10)")
-            
-            if best_signal == 'HOLD' or best_strategy == 'none':
-                print(f"   🔍 Result: HOLD - No strong signals detected")
-                return
-            
-            print(f"   🎯 Best Signal: {best_signal} from {best_strategy} strategy")
-            print(f"   💪 Signal Strength: {best_strength}/10")
-        else:
-            # Quick summary for non-detailed logs
-            signal_display = best_signal
-            if TRADING_CONFIG.get('buy_only_mode', False) and best_signal == 'SELL':
-                signal_display = 'HOLD (SELL→BUY_ONLY)'
-            
-            print(f"📊 {symbol}: ${latest['close']:.4f} ({price_change_str}) | Best: {signal_display if signal_display != 'HOLD' else 'HOLD'} ({best_strength}/10)")
-            
-            if best_signal == 'HOLD' or best_strategy == 'none':
-                return
-        
-        # Execute trade if conditions are met
-        self._execute_trade(symbol, best_strategy, best_signal, best_strength, allocation, df, show_detailed_logs)
-
-    def _execute_trade(self, symbol: str, strategy_name: str, signal: str, 
-                      strength: int, allocation: float, df, show_detailed_logs: bool = True):
-        """Execute a trade based on strategy signal"""
-        
-        # Risk management checks
-        balance = self.db.get_current_balance(self.user_id)
-        latest = df.iloc[-1]
-        entry_price = latest['close']
-        
-        # Check if we can execute this trade based on available balance
-        side = 'buy' if signal == 'BUY' else 'sell'
-        
-        # Check BUY_ONLY mode
-        if TRADING_CONFIG.get('buy_only_mode', False) and side == 'sell':
-            if show_detailed_logs:
-                print(f"   ⚠️  SELL signal ignored: BUY_ONLY mode enabled")
-                print(f"   🔍 Result: HOLD - Bot configured for BUY orders only")
-            return
-        
-        if side == 'sell':
-            # For SELL orders, we need to own the base asset (e.g., ETH in ETH/USDT)
-            base_asset = symbol.split('/')[0]  # ETH from ETH/USDT
-            asset_balance = self.db.get_current_balance(self.user_id, base_asset)
-            
-            if asset_balance <= 0:
-                if show_detailed_logs:
-                    print(f"   ⚠️  Cannot SELL {symbol}: No {base_asset} balance")
-                    print(f"   🔍 Result: HOLD - Need to own {base_asset} to sell")
-                return
-        
-        elif side == 'buy':
-            # For BUY orders, we need USDT balance
-            if balance <= 50:  # Minimum $50 to place a trade
-                if show_detailed_logs:
-                    print(f"   ⚠️  Cannot BUY {symbol}: Insufficient USDT balance (${balance:.2f})")
-                    print(f"   🔍 Result: HOLD - Need at least $50 USDT to trade")
-                return
-        
-        # Calculate indicators first to get ATR
-        strategy = self.strategy_manager.strategies[strategy_name]
-        df_with_indicators = strategy.calculate_indicators(df)
-        
-        # Get ATR from the indicators dataframe
-        if 'ATR' in df_with_indicators.columns:
-            atr_value = df_with_indicators['ATR'].iloc[-1]
-        else:
-            # Fallback: calculate a simple ATR-like value
-            atr_value = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
-        
-        side = 'buy' if signal == 'BUY' else 'sell'
-        stop_loss_price = self.risk_manager.determine_stop_loss(
-            entry_price, side, atr_value, df_with_indicators, method='adaptive'
+        self.enhanced_logger = EnhancedMarketLogger(
+            self.database, self.strategy_engine, self.risk_manager, self.exchange
         )
         
-        if stop_loss_price is None:
-            if show_detailed_logs:
-                print(f"   ❌ Could not determine stop loss for {symbol}")
-            return
+        print("   ✅ All components initialized")
         
-        # Calculate position size using strategy allocation
-        # Use appropriate balance based on trade side
-        if side == 'sell':
-            base_asset = symbol.split('/')[0]
-            available_balance = self.db.get_current_balance(self.user_id, base_asset)
-            # For sell orders, position size is limited by available asset balance
-            max_position_size = available_balance * 0.95  # Leave 5% buffer
-            calculated_position_size = self.strategy_manager.calculate_position_size(
-                strategy_name, balance, entry_price, stop_loss_price
-            )
-            position_size = min(calculated_position_size, max_position_size)
-        else:
-            position_size = self.strategy_manager.calculate_position_size(
-                strategy_name, balance, entry_price, stop_loss_price
-            )
+        # Load all strategies
+        self._load_all_strategies()
         
-        if position_size <= 0:
-            if show_detailed_logs:
-                print(f"   ❌ Position size too small for {symbol}")
-            return
+        # Bot state
+        self.is_running = False
+        self.is_paused = False
         
-        # Calculate trade details
-        take_profit_price = self.risk_manager.calculate_take_profit(
-            entry_price, stop_loss_price, side, risk_reward_ratio=2.0
-        )
-        
-        trade_value = position_size * entry_price
-        risk_amount = abs(entry_price - stop_loss_price) * position_size
-        
-        if show_detailed_logs:
-            print(f"\n   💼 TRADE EXECUTION PLAN:")
-            print(f"      Strategy: {strategy_name.title()}")
-            print(f"      Side: {side.upper()}")
-            print(f"      Entry: ${entry_price:.4f}")
-            print(f"      Stop Loss: ${stop_loss_price:.4f}")
-            print(f"      Take Profit: ${take_profit_price:.4f}")
-            print(f"      Position Size: {position_size:.6f}")
-            print(f"      Trade Value: ${trade_value:.2f}")
-            print(f"      Risk Amount: ${risk_amount:.2f}")
-        else:
-            print(f"🚀 EXECUTING {side.upper()} {symbol}: ${trade_value:.2f} ({strategy_name})")
-        
-        # Create order in database
-        order_id = self.db.create_order(
-            self.user_id, symbol, side, position_size, 
-            entry_price, strategy_name, strength
-        )
-        
-        # Execute order on exchange
-        try:
-            order = self.exchange.create_market_order(symbol, side, position_size)
-            
-            if order:
-                # Update order status in database
-                self.db.update_order_status(
-                    order_id, 'filled', position_size, entry_price, 0.0
-                )
-                
-                # Update balance
-                if side == 'buy':
-                    self.db.update_balance(self.user_id, 'USDT', -trade_value, f'buy_{symbol}')
-                else:
-                    self.db.update_balance(self.user_id, 'USDT', trade_value, f'sell_{symbol}')
-                
-                if show_detailed_logs:
-                    print(f"   ✅ TRADE EXECUTED SUCCESSFULLY!")
-                    print(f"      Order ID: {order_id}")
-                else:
-                    print(f"✅ SUCCESS: {side.upper()} {symbol} executed!")
-                
-                # Log strategy performance
-                self.strategy_manager.log_trade_result(
-                    strategy_name, symbol, signal, strength, True
-                )
-                
-            else:
-                # Update order status as failed
-                self.db.update_order_status(order_id, 'failed')
-                if show_detailed_logs:
-                    print(f"   ❌ TRADE EXECUTION FAILED!")
-                else:
-                    print(f"❌ FAILED: {side.upper()} {symbol} execution failed!")
-                
-                # Log strategy performance
-                self.strategy_manager.log_trade_result(
-                    strategy_name, symbol, signal, strength, False
-                )
-                
-        except Exception as e:
-            if show_detailed_logs:
-                print(f"   ❌ Trade execution error: {e}")
-            else:
-                print(f"❌ ERROR: {symbol} execution error: {e}")
-            self.db.update_order_status(order_id, 'failed')
-
-    def _show_strategy_performance(self):
-        """Show strategy performance statistics"""
-        performance = self.strategy_manager.get_strategy_performance()
-        
-        if performance:
-            print(f"\n📈 STRATEGY PERFORMANCE:")
-            for strategy_name, stats in performance.items():
-                success_rate = stats.get('success_rate', 0)
-                total_signals = stats.get('total_signals', 0)
-                avg_strength = stats.get('avg_strength', 0)
-                
-                print(f"   {strategy_name.title()}: {success_rate:.1f}% success ({total_signals} signals, avg strength: {avg_strength:.1f})")
-
-    def get_user_dashboard(self) -> Dict:
-        """Get comprehensive user dashboard data"""
-        stats = self.db.get_trading_stats(self.user_id)
-        portfolio = self.strategy_manager.get_portfolio_status()
-        recent_trades = self.db.get_user_trades(self.user_id, limit=10)
-        open_orders = self.db.get_user_orders(self.user_id, status='filled', limit=10)
-        
-        return {
-            'user_stats': stats,
-            'portfolio': portfolio,
-            'recent_trades': recent_trades,
-            'open_orders': open_orders,
-            'strategy_performance': self.strategy_manager.get_strategy_performance()
+        # Performance tracking
+        self.session_stats = {
+            'start_time': datetime.utcnow(),
+            'signals_generated': 0,
+            'trades_executed': 0,
+            'analyses_completed': 0
         }
-
-def setup_user_account():
-    """Setup user account and trading preferences"""
-    print("🚀 ENHANCED TRADING BOT SETUP")
-    print("="*50)
-    
-    # Initialize database
-    db = initialize_database()
-    
-    # Get user information
-    print("\n👤 USER ACCOUNT SETUP:")
-    name = input("Enter your name: ").strip()
-    email = input("Enter your email: ").strip()
-    
-    if not name or not email:
-        print("❌ Name and email are required!")
-        return None, []
-    
-    try:
-        # Create user account
-        user_id = db.create_user(email, name, initial_balance=10000.0)
-        print(f"✅ Created user account: {user_id}")
         
-    except ValueError as e:
-        print(f"❌ {e}")
-        # Try to find existing user
-        existing_users = list(db.users.find({"email": email}))
-        if existing_users:
-            user_id = existing_users[0]['user_id']
-            print(f"✅ Using existing account: {user_id}")
-        else:
-            return None, []
+        # Setup signal handlers
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        print("🎯 Trading bot ready!")
     
-    # Select trading pairs
-    print(f"\n📊 TRADING PAIR SELECTION:")
-    strategy_manager = StrategyManager(user_id)
-    recommended_pairs = strategy_manager.get_recommended_pairs()
+    def _load_all_strategies(self):
+        """Load and register all available strategies"""
+        print("🎯 Loading trading strategies...")
+        
+        # Core strategies
+        strategies = [
+            MultiIndicatorStrategy(config.STRATEGY_CONFIG),
+            MeanReversionStrategy(config.STRATEGY_CONFIG),
+            TrendFollowingStrategy(config.STRATEGY_CONFIG),
+            BreakoutStrategy(config.STRATEGY_CONFIG)
+        ]
+        
+        # Advanced strategies
+        factory = AdvancedStrategyFactory()
+        advanced_strategies = factory.get_all_strategies(config.STRATEGY_CONFIG)
+        strategies.extend(advanced_strategies)
+        
+        # Register all strategies
+        for strategy in strategies:
+            self.strategy_engine.register_strategy(strategy)
+        
+        print(f"   ✅ {len(strategies)} strategies loaded")
+        
+        # Activate default strategies
+        default_active = ['MultiIndicator', 'BbandRsi', 'EmaRsi', 'MacdRsi', 'MeanReversion']
+        for strategy_name in default_active:
+            if strategy_name in self.strategy_engine.strategies:
+                self.strategy_engine.activate_strategy(strategy_name)
+        
+        print(f"   🔥 {len(self.strategy_engine.active_strategies)} strategies activated")
     
-    print("Available trading pairs:")
-    print("\n🛡️  CONSERVATIVE (Low Risk):")
-    for i, pair in enumerate(recommended_pairs['conservative'], 1):
-        print(f"   {i}. {pair['symbol']} - {pair['description']}")
-    
-    print("\n⚡ MOMENTUM (Medium Risk):")
-    for i, pair in enumerate(recommended_pairs['momentum'], len(recommended_pairs['conservative']) + 1):
-        print(f"   {i}. {pair['symbol']} - {pair['description']}")
-    
-    print("\n🔥 AGGRESSIVE (High Risk):")
-    for i, pair in enumerate(recommended_pairs['aggressive'], len(recommended_pairs['conservative']) + len(recommended_pairs['momentum']) + 1):
-        print(f"   {i}. {pair['symbol']} - {pair['description']}")
-    
-    # Get user selection
-    all_pairs = recommended_pairs['all']
-    selected_pairs = []
-    
-    while True:
+    def start_trading(self):
+        """Start the trading bot with 30-second analysis"""
+        if self.is_running:
+            print("Bot is already running!")
+            return
+        
+        self.is_running = True
+        print("\n🟢 STARTING ENHANCED TRADING BOT")
+        print("📊 30-second analysis will begin shortly...")
+        print("=" * 50)
+        
         try:
-            selection = input(f"\nSelect pairs (1-{len(all_pairs)}, comma-separated) or 'done': ").strip()
+            # Start enhanced logging
+            self.enhanced_logger.start_logging()
             
-            if selection.lower() == 'done':
-                break
+            # Show current market status
+            self._show_market_status()
             
-            indices = [int(x.strip()) - 1 for x in selection.split(',')]
-            for idx in indices:
-                if 0 <= idx < len(all_pairs):
-                    pair_symbol = all_pairs[idx]['symbol']
-                    if pair_symbol not in selected_pairs:
-                        selected_pairs.append(pair_symbol)
-                        print(f"✅ Added {pair_symbol}")
-                    else:
-                        print(f"⚠️  {pair_symbol} already selected")
-                else:
-                    print(f"❌ Invalid selection: {idx + 1}")
+            # Schedule tasks
+            schedule.every(5).minutes.do(self._monitor_risk)
+            schedule.every(10).minutes.do(self._update_portfolio)
+            schedule.every(1).hours.do(self._hourly_report)
+            
+            # Main loop
+            print("🔄 Bot running... Press Ctrl+C to stop")
+            while self.is_running:
+                schedule.run_pending()
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            print("\n🛑 Bot stopped by user")
+        except Exception as e:
+            self.logger.error(f"Critical error: {e}", exception=e)
+            print(f"❌ Critical error: {e}")
+        finally:
+            self.stop_trading()
+    
+    def stop_trading(self):
+        """Stop the trading bot gracefully"""
+        if not self.is_running:
+            return
         
-        except ValueError:
-            print("❌ Please enter valid numbers separated by commas")
+        print("🛑 Stopping trading bot...")
+        self.is_running = False
+        
+        # Stop enhanced logging
+        self.enhanced_logger.stop_logging()
+        
+        # Generate session summary
+        self._generate_session_summary()
+        
+        print("✅ Trading bot stopped successfully")
     
-    if not selected_pairs:
-        print("⚠️  No pairs selected, using default: ETH/USDT")
-        selected_pairs = ['ETH/USDT']
+    def run_backtest(self, symbol: str = None, days: int = 30, strategy: str = None):
+        """Run comprehensive backtesting"""
+        symbol = symbol or config.TRADING_CONFIG['symbol'].replace('/', '')
+        
+        print(f"\n📈 BACKTESTING - {symbol} ({days} days)")
+        print("=" * 50)
+        
+        try:
+            # Fetch historical data
+            market_data = self._fetch_market_data(symbol, '1h', days * 24)
+            if market_data is None:
+                print("❌ Could not fetch market data")
+                return
+            
+            print(f"✅ Fetched {len(market_data)} data points")
+            
+            # Test specific strategy or all active ones
+            strategies_to_test = []
+            if strategy and strategy in self.strategy_engine.strategies:
+                strategies_to_test = [self.strategy_engine.strategies[strategy]]
+            else:
+                strategies_to_test = [self.strategy_engine.strategies[name] 
+                                    for name in self.strategy_engine.active_strategies[:5]]
+            
+            # Run backtests
+            results = []
+            backtester = AdvancedBacktester(initial_capital=10000)
+            
+            for strat in strategies_to_test:
+                print(f"\n🧪 Testing {strat.name}...")
+                try:
+                    result = backtester.run_backtest(
+                        strat, market_data.set_index('timestamp'), config.STRATEGY_CONFIG
+                    )
+                    
+                    metrics = result['metrics']
+                    results.append({
+                        'strategy': strat.name,
+                        'return_pct': metrics.total_return_pct,
+                        'trades': metrics.total_trades,
+                        'win_rate': metrics.win_rate,
+                        'max_drawdown': metrics.max_drawdown_pct,
+                        'sharpe_ratio': metrics.sharpe_ratio
+                    })
+                    
+                    print(f"   📊 Return: {metrics.total_return_pct:+.2f}% | "
+                          f"Trades: {metrics.total_trades} | "
+                          f"Win Rate: {metrics.win_rate:.1f}%")
+                    
+                except Exception as e:
+                    print(f"   ❌ Error testing {strat.name}: {e}")
+            
+            # Show summary
+            if results:
+                print(f"\n🏆 BACKTEST RESULTS SUMMARY")
+                print("-" * 50)
+                results.sort(key=lambda x: x['return_pct'], reverse=True)
+                
+                for i, r in enumerate(results, 1):
+                    print(f"{i}. {r['strategy']:<15}: {r['return_pct']:+6.2f}% "
+                          f"({r['trades']} trades, {r['win_rate']:.1f}% win rate)")
+                
+                best = results[0]
+                print(f"\n🥇 Best performer: {best['strategy']} ({best['return_pct']:+.2f}%)")
+        
+        except Exception as e:
+            print(f"❌ Backtesting error: {e}")
     
-    print(f"\n✅ Selected pairs: {', '.join(selected_pairs)}")
+    def show_live_analysis(self):
+        """Show current live market analysis"""
+        print(f"\n📊 LIVE MARKET ANALYSIS")
+        print("=" * 50)
+        
+        try:
+            symbol = config.TRADING_CONFIG['symbol'].replace('/', '')
+            market_data = self._fetch_market_data(symbol, config.TRADING_CONFIG['timeframe'])
+            
+            if market_data is None:
+                print("❌ Could not fetch market data")
+                return
+            
+            current_price = float(market_data['close'].iloc[-1])
+            print(f"💰 {symbol}: ${current_price:,.2f}")
+            
+            # Calculate indicators
+            indicators = self.indicators.calculate_all_indicators(market_data, config.STRATEGY_CONFIG)
+            
+            # Show key indicators
+            if 'rsi' in indicators:
+                rsi_status = "Overbought" if indicators['rsi'] > 70 else "Oversold" if indicators['rsi'] < 30 else "Neutral"
+                print(f"📈 RSI: {indicators['rsi']:.1f} ({rsi_status})")
+            
+            if 'macd_bullish' in indicators:
+                macd_status = "Bullish" if indicators['macd_bullish'] else "Bearish"
+                print(f"📊 MACD: {macd_status}")
+            
+            # Generate signals
+            signals = self.strategy_engine.analyze_market(symbol, market_data, config.STRATEGY_CONFIG)
+            
+            buy_signals = [s for s in signals if s['signal'] == 'BUY']
+            sell_signals = [s for s in signals if s['signal'] == 'SELL']
+            
+            print(f"\n🎯 CURRENT SIGNALS:")
+            print(f"   🟢 BUY: {len(buy_signals)} strategies")
+            print(f"   🔴 SELL: {len(sell_signals)} strategies")
+            print(f"   🟡 HOLD: {len(signals) - len(buy_signals) - len(sell_signals)} strategies")
+            
+            # Show top signals
+            if buy_signals:
+                best_buy = max(buy_signals, key=lambda x: x['confidence'])
+                print(f"   🏆 Best BUY: {best_buy['strategy']} ({best_buy['confidence']:.1%} confidence)")
+            
+            if sell_signals:
+                best_sell = max(sell_signals, key=lambda x: x['confidence'])
+                print(f"   🏆 Best SELL: {best_sell['strategy']} ({best_sell['confidence']:.1%} confidence)")
+        
+        except Exception as e:
+            print(f"❌ Analysis error: {e}")
     
-    # Strategy allocation
-    print(f"\n⚙️  STRATEGY ALLOCATION:")
-    strategies = strategy_manager.get_available_strategies()
-    for name, info in strategies.items():
-        print(f"   {name.title()}: {info['allocation']:.0%} ({info['description']})")
+    def manage_strategies(self):
+        """Strategy management interface"""
+        while True:
+            print(f"\n🎯 STRATEGY MANAGEMENT")
+            print("=" * 30)
+            print("1. 📊 Show all strategies")
+            print("2. 🔥 Show active strategies") 
+            print("3. ➕ Activate strategy")
+            print("4. ➖ Deactivate strategy")
+            print("5. 🔙 Back to main menu")
+            
+            choice = input("\nEnter choice (1-5): ").strip()
+            
+            if choice == '1':
+                print(f"\n📊 ALL STRATEGIES ({len(self.strategy_engine.strategies)}):")
+                factory = AdvancedStrategyFactory()
+                descriptions = factory.get_strategy_descriptions()
+                
+                for name in self.strategy_engine.strategies.keys():
+                    status = "🔥 ACTIVE" if name in self.strategy_engine.active_strategies else "⚪ INACTIVE"
+                    desc = descriptions.get(name, "Core trading strategy")
+                    print(f"   {status} {name}: {desc}")
+            
+            elif choice == '2':
+                print(f"\n🔥 ACTIVE STRATEGIES ({len(self.strategy_engine.active_strategies)}):")
+                for name in self.strategy_engine.active_strategies:
+                    print(f"   ✅ {name}")
+            
+            elif choice == '3':
+                inactive = [name for name in self.strategy_engine.strategies.keys() 
+                          if name not in self.strategy_engine.active_strategies]
+                if not inactive:
+                    print("All strategies are already active!")
+                    continue
+                
+                print("Inactive strategies:")
+                for i, name in enumerate(inactive, 1):
+                    print(f"   {i}. {name}")
+                
+                try:
+                    idx = int(input("Select strategy to activate: ")) - 1
+                    if 0 <= idx < len(inactive):
+                        self.strategy_engine.activate_strategy(inactive[idx])
+                        print(f"✅ {inactive[idx]} activated")
+                except (ValueError, IndexError):
+                    print("Invalid selection!")
+            
+            elif choice == '4':
+                if not self.strategy_engine.active_strategies:
+                    print("No strategies are active!")
+                    continue
+                
+                print("Active strategies:")
+                for i, name in enumerate(self.strategy_engine.active_strategies, 1):
+                    print(f"   {i}. {name}")
+                
+                try:
+                    idx = int(input("Select strategy to deactivate: ")) - 1
+                    if 0 <= idx < len(self.strategy_engine.active_strategies):
+                        name = self.strategy_engine.active_strategies[idx]
+                        self.strategy_engine.deactivate_strategy(name)
+                        print(f"❌ {name} deactivated")
+                except (ValueError, IndexError):
+                    print("Invalid selection!")
+            
+            elif choice == '5':
+                break
+            else:
+                print("Invalid choice!")
     
-    return user_id, selected_pairs
+    def _fetch_market_data(self, symbol: str, timeframe: str = '1h', limit: int = 100):
+        """Fetch market data from exchange"""
+        try:
+            if not self.exchange.client:
+                return None
+                
+            binance_interval = self._map_timeframe(timeframe)
+            klines = self.exchange.get_klines(symbol=symbol, interval=binance_interval, limit=limit)
+            
+            if not klines:
+                return None
+            
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'number_of_trades',
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col])
+            
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching market data: {e}", exception=e)
+            return None
+    
+    def _map_timeframe(self, timeframe: str) -> str:
+        """Map timeframe to Binance format"""
+        mapping = {'1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m',
+                  '1h': '1h', '4h': '4h', '1d': '1d'}
+        return mapping.get(timeframe, '1h')
+    
+    def _show_market_status(self):
+        """Show initial market status"""
+        try:
+            symbol = config.TRADING_CONFIG['symbol'].replace('/', '')
+            market_data = self._fetch_market_data(symbol, config.TRADING_CONFIG['timeframe'])
+            
+            if market_data is not None:
+                current_price = float(market_data['close'].iloc[-1])
+                print(f"💰 {symbol}: ${current_price:,.2f}")
+                print(f"📊 Timeframe: {config.TRADING_CONFIG['timeframe']}")
+                print(f"🎯 Active strategies: {len(self.strategy_engine.active_strategies)}")
+                print(f"⚖️ Risk per trade: {config.TRADING_CONFIG['risk_per_trade']*100:.1f}%")
+        except Exception as e:
+            print(f"⚠️ Could not fetch initial market status: {e}")
+    
+    def _monitor_risk(self):
+        """Monitor risk metrics"""
+        try:
+            risk_report = self.risk_manager.get_risk_report(10000)
+            if risk_report['daily_pnl']['status'] == 'WARNING':
+                print(f"⚠️ RISK ALERT: Daily loss limit approaching")
+        except Exception as e:
+            self.logger.error(f"Risk monitoring error: {e}", exception=e)
+    
+    def _update_portfolio(self):
+        """Update portfolio information"""
+        try:
+            portfolio_data = {
+                'total_balance': 10000.0,
+                'available_balance': 8000.0,
+                'positions': [],
+                'unrealized_pnl': 0.0,
+                'realized_pnl': 0.0,
+                'total_trades': self.session_stats['trades_executed']
+            }
+            self.database.update_portfolio(portfolio_data)
+        except Exception as e:
+            self.logger.error(f"Portfolio update error: {e}", exception=e)
+    
+    def _hourly_report(self):
+        """Generate hourly report"""
+        print(f"\n📈 HOURLY REPORT - {datetime.utcnow().strftime('%H:%M')}")
+        print(f"   🎯 Signals: {self.session_stats['signals_generated']}")
+        print(f"   💼 Trades: {self.session_stats['trades_executed']}")
+        print(f"   📊 Analyses: {getattr(self.enhanced_logger, 'analysis_count', 0)}")
+    
+    def _generate_session_summary(self):
+        """Generate session summary"""
+        duration = datetime.utcnow() - self.session_stats['start_time']
+        print(f"\n📋 SESSION SUMMARY:")
+        print(f"   Duration: {duration}")
+        print(f"   Analyses: {getattr(self.enhanced_logger, 'analysis_count', 0)}")
+        print(f"   Signals: {self.session_stats['signals_generated']}")
+        print(f"   Trades: {self.session_stats['trades_executed']}")
+    
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals"""
+        print(f"\n🔔 Received signal {signum}, shutting down...")
+        self.stop_trading()
+        sys.exit(0)
 
 def main():
-    """Main function to run the enhanced trading bot"""
-    try:
-        # Setup user account and preferences
-        user_id, selected_pairs = setup_user_account()
+    """Main entry point"""
+    bot = AdvancedTradingBot()
+    
+    while True:
+        print(f"\n🚀 ADVANCED TRADING BOT MENU")
+        print("=" * 40)
+        print("1. 🔥 Start Trading (30s analysis)")
+        print("2. 📈 Run Backtesting")
+        print("3. 📊 Live Market Analysis")
+        print("4. 🎯 Manage Strategies")
+        print("5. ⚙️ Show Configuration")
+        print("6. 🛑 Exit")
         
-        if not user_id:
-            print("❌ Failed to setup user account")
-            return
+        choice = input(f"\nEnter choice (1-6): ").strip()
         
-        # Initialize advanced trading bot
-        bot = AdvancedTradingBot(user_id, selected_pairs)
-        
-        print(f"\n🚀 STARTING ADVANCED TRADING BOT")
-        print("="*50)
-        print("⚠️  Running in TEST MODE - No real money at risk")
-        print(f"📊 Monitoring {len(selected_pairs)} pairs with multiple strategies")
-        print("📝 Detailed logs every 30 seconds, quick updates every 10 seconds")
-        
-        # Show trading mode
-        if TRADING_CONFIG.get('buy_only_mode', False):
-            print("🔒 BUY_ONLY MODE: Will only execute BUY orders (SELL signals ignored)")
-        else:
-            print("🔄 FULL TRADING MODE: Will execute both BUY and SELL orders")
+        try:
+            if choice == '1':
+                bot.start_trading()
             
-        print("🛑 Press Ctrl+C to stop")
-        print("="*50)
-        
-        # Run initial cycle
-        bot.run_trading_cycle()
-        
-        # Schedule regular cycles (every 10 seconds for quick updates)
-        schedule.every(10).seconds.do(bot.run_trading_cycle)
-        
-        while True:
-            schedule.run_pending()
-            time.sleep(5)  # Check every 5 seconds for responsiveness
+            elif choice == '2':
+                symbol = input("Symbol (default ETHUSDT): ").strip() or 'ETHUSDT'
+                days = int(input("Days (default 7): ").strip() or 7)
+                strategy = input("Strategy (default all active): ").strip() or None
+                bot.run_backtest(symbol, days, strategy)
             
-    except KeyboardInterrupt:
-        print("\n\n🛑 Advanced Trading Bot stopped by user")
-        print("👋 Thanks for using the Advanced Trading Bot!")
+            elif choice == '3':
+                bot.show_live_analysis()
+            
+            elif choice == '4':
+                bot.manage_strategies()
+            
+            elif choice == '5':
+                print(f"\n⚙️ CONFIGURATION:")
+                print(f"   Symbol: {config.TRADING_CONFIG['symbol']}")
+                print(f"   Timeframe: {config.TRADING_CONFIG['timeframe']}")
+                print(f"   Risk per trade: {config.TRADING_CONFIG['risk_per_trade']*100:.1f}%")
+                print(f"   Test mode: {'✅ ON' if config.TEST_MODE else '❌ OFF'}")
+                print(f"   Active strategies: {len(bot.strategy_engine.active_strategies)}")
+            
+            elif choice == '6':
+                print("👋 Goodbye!")
+                break
+            
+            else:
+                print("❌ Invalid choice!")
         
-        # Show final dashboard
-        if 'bot' in locals():
-            dashboard = bot.get_user_dashboard()
-            print(f"\n📊 FINAL DASHBOARD:")
-            print(f"   Total Trades: {dashboard['user_stats']['total_trades']}")
-            print(f"   Win Rate: {dashboard['user_stats']['win_rate']:.1f}%")
-            print(f"   Total PnL: ${dashboard['user_stats']['total_pnl']:.2f}")
-            print(f"   Current Balance: ${dashboard['user_stats']['current_balance']:.2f}")
-        
-    except Exception as e:
-        print(f"\n❌ Advanced Trading Bot stopped due to error: {e}")
-        import traceback
-        traceback.print_exc()
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     main()
